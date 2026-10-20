@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getAgencyId() {
+      return get(/databases/$(database)/documents/agencies/$(request.auth.uid)/meta/data).data.agencyId;
+    }
+
+    function isAgencyMember() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data);
+    }
+
+    function userAgencyId() {
+      return get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId;
+    }
+
+    function isPlatformAdmin() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.role == 'platform_admin';
+    }
+
+    function memberRole() {
+      return get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.role;
+    }
+
+    function isAtLeastAdmin() {
+      return memberRole() in ['agency_owner', 'agency_admin', 'platform_admin'];
+    }
+
+    // ---- Agency meta (creation, owned by the creating user) ----
+    match /agencies/{agencyId} {
+      match /meta/{docId} {
+        allow read: if isSignedIn() &&
+          get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId == agencyId;
+        allow create: if isSignedIn() && request.auth.uid == request.resource.data.ownerId;
+        allow update: if isSignedIn() &&
+          get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId == agencyId &&
+          isAtLeastAdmin();
+        allow delete: if false;
+      }
+
+      // All sub-collections follow the same pattern: read/write only by
+      // authenticated members whose profile.agencyId matches this path.
+      match /{subcollection}/{docId} {
+        allow read, write: if isSignedIn() &&
+          get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId == agencyId;
+      }
+    }
+
+    // ---- Agency member profiles (top-level for fast auth lookup) ----
+    match /agency_members/{userId}/profile/{docId} {
+      allow read: if isSignedIn() &&
+        (request.auth.uid == userId ||
+         get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId
+           == resource.data.agencyId);
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (
+        request.auth.uid == userId ||
+        get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.role
+          in ['agency_owner', 'agency_admin', 'platform_admin']
+      );
+      allow delete: if false;
+    }
+
+    // ---- Platform admin collections (if needed later) ----
+    match /platform/{doc=**} {
+      allow read, write: if isPlatformAdmin();
+    }
+  }
+}
