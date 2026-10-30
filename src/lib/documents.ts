@@ -1,5 +1,6 @@
 import "firebase/compat/firestore";
 import { db } from "./firebase";
+import { stripUndefined } from "./sanitize";
 
 export interface DocumentRecord {
   id: string;
@@ -23,7 +24,7 @@ export async function createDocumentRecord(
     .collection("agencies")
     .doc(agencyId)
     .collection("documents")
-    .add({ ...record, uploadedAt: now });
+    .add({ ...stripUndefined(record), uploadedAt: now });
   return docRef.id;
 }
 

@@ -2,73 +2,738 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helpers
+    // ---- Authentication & Profile Lookup ----
+
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function getAgencyId() {
-      return get(/databases/$(database)/documents/agencies/$(request.auth.uid)/meta/data).data.agencyId;
+    function getProfileAgencyId(uid) {
+      return get(/databases/$(database)/documents/agency_members/$(uid)/profile/data).data.agencyId;
     }
 
-    function isAgencyMember() {
-      return isSignedIn() &&
-        exists(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data);
+    function getProfileRole(uid) {
+      return get(/databases/$(database)/documents/agency_members/$(uid)/profile/data).data.role;
     }
 
-    function userAgencyId() {
-      return get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId;
+    function getUserAgencyId() {
+      return getProfileAgencyId(request.auth.uid);
+    }
+
+    function getUserRole() {
+      return getProfileRole(request.auth.uid);
     }
 
     function isPlatformAdmin() {
-      return isSignedIn() &&
-        get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.role == 'platform_admin';
+      return isSignedIn() && getUserRole() == 'platform_admin';
     }
 
-    function memberRole() {
-      return get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.role;
+    function isAgencyOwnerOrAdmin() {
+      return isSignedIn() && (getUserRole() == 'agency_owner' || getUserRole() == 'agency_admin');
     }
 
-    function isAtLeastAdmin() {
-      return memberRole() in ['agency_owner', 'agency_admin', 'platform_admin'];
+    function isAgencyOwner() {
+      return isSignedIn() && getUserRole() == 'agency_owner';
     }
 
-    // ---- Agency meta (creation, owned by the creating user) ----
+    function isAgencyAdmin() {
+      return isSignedIn() && getUserRole() == 'agency_admin';
+    }
+
+    function isMemberOfAgency(targetAgencyId) {
+      return isSignedIn() && getUserAgencyId() == targetAgencyId;
+    }
+
+    // ---- Role Hierarchy (per SECURITY_MODEL.md) ----
+    // platform_admin: all access
+    // agency_owner: all access within their agency
+    // agency_admin: all access within their agency
+    // property_manager: read/write assigned properties, record expenses only
+    // accountant: read properties, read tenancies, handle payments/expenses
+    // field_agent: read assigned properties/units, read assigned tenancies
+    // auditor: read-only access
+    // landlord: read own properties, own tenancies
+    // tenant: read own tenancies
+
+    // ---- Agency Meta ----
+    // Agency creation: only the authenticated user's profile ownerId can create
+    // Agency read: members can read agencies within their own agency
+    // Agency update/delete: only admins
+
     match /agencies/{agencyId} {
       match /meta/{docId} {
         allow read: if isSignedIn() &&
-          get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId == agencyId;
-        allow create: if isSignedIn() && request.auth.uid == request.resource.data.ownerId;
+          getUserAgencyId() == agencyId;
+
+        // Agency creation happens during sign-up, before the creator has a
+        // membership profile, so this rule cannot depend on the role lookup.
+        allow create: if isSignedIn() &&
+          request.resource.data.ownerId == request.auth.uid;
+
         allow update: if isSignedIn() &&
-          get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId == agencyId &&
-          isAtLeastAdmin();
+          isAgencyOwnerOrAdmin() &&
+          getUserAgencyId() == agencyId &&
+          // Prevent role escalation outside assigned agency
+          !('role' in request.resource.data) ||
+          request.resource.data.role in ['agency_owner', 'agency_admin'];
+
         allow delete: if false;
       }
 
-      // All sub-collections follow the same pattern: read/write only by
-      // authenticated members whose profile.agencyId matches this path.
-      match /{subcollection}/{docId} {
-        allow read, write: if isSignedIn() &&
-          get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId == agencyId;
-      }
+      // Sub-collections under agencies/{agencyId} follow role-based access
+      // This catch-all must come after specific match blocks
     }
 
-    // ---- Agency member profiles (top-level for fast auth lookup) ----
+    // ---- Agency Member Profiles ----
+    // Top-level profile document for fast O(1) lookup
     match /agency_members/{userId}/profile/{docId} {
+      // Users can always read their own profile
       allow read: if isSignedIn() &&
         (request.auth.uid == userId ||
-         get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.agencyId
-           == resource.data.agencyId);
+         getUserAgencyId() == getProfileAgencyId(userId));
+
+      // Users can create their own profile
       allow create: if isSignedIn() && request.auth.uid == userId;
-      allow update: if isSignedIn() && (
-        request.auth.uid == userId ||
-        get(/databases/$(database)/documents/agency_members/$(request.auth.uid)/profile/data).data.role
-          in ['agency_owner', 'agency_admin', 'platform_admin']
-      );
+
+      // Role-based update permissions
+      allow update: if isSignedIn() &&
+        (
+          // Owner/admin can update any profile in their agency
+          isAgencyOwnerOrAdmin() &&
+          getUserAgencyId() == getProfileAgencyId(userId) ||
+          // Regular users can only update their own profile
+          request.auth.uid == userId
+        ) &&
+        // Prevent role downgrade for owners, prevent role escalation
+        ( !( 'role' in request.resource.data ) ||
+          (getUserRole() in ['agency_owner', 'agency_admin'] &&
+           request.resource.data.role in ['agency_owner', 'agency_admin', 'property_manager', 'accountant', 'field_agent', 'auditor', 'landlord', 'tenant']) );
+
       allow delete: if false;
     }
 
-    // ---- Platform admin collections (if needed later) ----
+    // ---- Properties ----
+    // Per role-based access control from SECURITY_MODEL.md
+    match /agencies/{agencyId}/properties/{propertyId} {
+      // Platform admins and agency owners/admins have full access
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager: full access to properties within their agency
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read properties and tenancies
+      allow read: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: read assigned properties and units
+      allow read: if isSignedIn() &&
+        getUserRole() == 'field_agent' &&
+        isMemberOfAgency(agencyId);
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read own properties
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        // Property has this user listed as an owner
+        request.auth.uid in resource.data.ownerIds;
+
+      // tenant: no direct access
+    }
+
+    // ---- Units ----
+    match /agencies/{agencyId}/properties/{propertyId}/units/{unitId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager: read/write units of assigned properties
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read units
+      allow read: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: read assigned units
+      allow read: if isSignedIn() &&
+        getUserRole() == 'field_agent' &&
+        isMemberOfAgency(agencyId);
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read units of their properties
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        isMemberOfAgency(agencyId);
+
+      // tenant: no direct access
+      allow create, update, delete: if false;
+    }
+
+    // ---- Tenancies ----
+    match /agencies/{agencyId}/tenancies/{tenancyId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager: read/write tenancies of assigned properties
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read tenancies
+      allow read: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: read assigned tenancies
+      allow read: if isSignedIn() &&
+        getUserRole() == 'field_agent' &&
+        isMemberOfAgency(agencyId);
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read own tenancies (where they're landlord)
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        // Tenancy has this user as landlordId
+        get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(tenancyId)).data.landlordId == request.auth.uid;
+
+      // tenant: read own tenancies
+      allow read: if isSignedIn() &&
+        getUserRole() == 'tenant' &&
+        get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(tenancyId)).data.tenantId == request.auth.uid;
+
+      // Tenant cannot write
+      allow create, update, delete: if false;
+    }
+
+    // ---- Rent Charges ----
+    match /agencies/{agencyId}/rent_charges/{rentChargeId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager: read/write rent charges of assigned properties
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read rent charges
+      allow read: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: read rent charges
+      allow read: if isSignedIn() &&
+        getUserRole() == 'field_agent' &&
+        isMemberOfAgency(agencyId);
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read rent charges for their own tenancies
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        resource.data.tenancyId != null &&
+        get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(resource.data.tenancyId)).data.landlordId == request.auth.uid;
+
+      // tenant: read rent charges for their own tenancies
+      allow read: if isSignedIn() &&
+        getUserRole() == 'tenant' &&
+        resource.data.tenancyId != null &&
+        get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(resource.data.tenancyId)).data.tenantId == request.auth.uid;
+
+      // Tenant cannot write
+      allow create, update, delete: if false;
+    }
+
+    // ---- Payments ----
+    match /agencies/{agencyId}/payments/{paymentId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read/write payments
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager: read payments shown on the Rent & Payments screen
+      allow read: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: read-only payments
+      allow read: if isSignedIn() &&
+        getUserRole() == 'field_agent' &&
+        isMemberOfAgency(agencyId);
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read payments collected against their own tenancies
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        resource.data.tenancyId != null &&
+        get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(resource.data.tenancyId)).data.landlordId == request.auth.uid;
+
+      // tenant: read their own payments
+      allow read: if isSignedIn() &&
+        getUserRole() == 'tenant' &&
+        resource.data.tenantId == request.auth.uid;
+
+      // Tenant cannot write
+      allow create, update, delete: if false;
+    }
+
+    // ---- Expenses ----
+    match /agencies/{agencyId}/expenses/{expenseId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager: can record expenses (write), read all
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read/write expenses
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: read-only expenses
+      allow read: if isSignedIn() &&
+        getUserRole() == 'field_agent' &&
+        isMemberOfAgency(agencyId);
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read own expenses
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        isMemberOfAgency(agencyId);
+
+      // tenant: no access
+      allow create, update, delete: if false;
+    }
+
+    // ---- Deposits ----
+    match /agencies/{agencyId}/deposits/{depositId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read/write deposits
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: no access
+      allow read: if false;
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read own deposits
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        isMemberOfAgency(agencyId);
+
+      // tenant: read deposits recorded against their own tenancy
+      allow read: if isSignedIn() &&
+        getUserRole() == 'tenant' &&
+        resource.data.tenancyId != null &&
+        get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(resource.data.tenancyId)).data.tenantId == request.auth.uid;
+
+      // Tenant cannot write
+      allow create, update, delete: if false;
+    }
+
+    // ---- Commissions ----
+    match /agencies/{agencyId}/commissions/{commissionId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read/write commissions
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: no access
+      allow read: if false;
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read own commissions
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        isMemberOfAgency(agencyId);
+
+      // tenant: no access
+      allow create, update, delete: if false;
+    }
+
+    // ---- Remittances ----
+    match /agencies/{agencyId}/remittances/{remittanceId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read/write remittances
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: no access
+      allow read: if false;
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read own remittances
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        isMemberOfAgency(agencyId);
+
+      // tenant: no access
+      allow create, update, delete: if false;
+    }
+
+    // ---- Owner records ----
+    match /agencies/{agencyId}/owners/{ownerId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager: read-only owners
+      allow read: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read/write owners
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: no access
+      allow read: if false;
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: read own record
+      allow read: if isSignedIn() &&
+        getUserRole() == 'landlord' &&
+        ownerId == request.auth.uid;
+
+      // tenant: no access
+      allow create, update, delete: if false;
+    }
+
+    // ---- Tenant records ----
+    match /agencies/{agencyId}/tenants/{tenantId} {
+      // Full access for platform admin, agency owner, agency admin
+      allow read, write: if isSignedIn() &&
+        isPlatformAdmin();
+
+      // Agency owner/admin: full access within agency
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager: read assigned tenants
+      allow read: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      // accountant: read/write tenants
+      allow read, write: if isSignedIn() &&
+        getUserRole() == 'accountant' &&
+        isMemberOfAgency(agencyId);
+
+      // field_agent: read assigned tenants
+      allow read: if isSignedIn() &&
+        getUserRole() == 'field_agent' &&
+        isMemberOfAgency(agencyId);
+
+      // auditor: read-only
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      // landlord: listing tenant records requires a query over tenancies,
+      // which security rules cannot express. Landlord-facing screens read
+      // tenancy documents directly instead, so this collection stays closed
+      // to the landlord role.
+
+      // tenant: read own record
+      allow read: if isSignedIn() &&
+        getUserRole() == 'tenant' &&
+        tenantId == request.auth.uid;
+
+      // Tenant cannot write
+      allow create, update, delete: if false;
+    }
+
+    // ---- Activity Events (append-only) ----
+    match /agencies/{agencyId}/activity_events/{eventId} {
+      // Members can read the audit trail of their own agency
+      allow read: if isSignedIn() &&
+        isMemberOfAgency(agencyId);
+
+      // Operational roles may append events; updates and deletes are never allowed
+      allow create: if isSignedIn() &&
+        isMemberOfAgency(agencyId) &&
+        getUserRole() in ['agency_owner', 'agency_admin', 'property_manager', 'accountant'];
+
+      allow update, delete: if false;
+    }
+
+    // ---- Staff records ----
+    // Mirror of agency_members kept inside the agency for admin screens.
+    match /agencies/{agencyId}/users/{userId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+
+      // Members can read their own staff record
+      allow read: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+        isMemberOfAgency(agencyId) &&
+        request.auth.uid == userId;
+
+      allow update, delete: if false;
+    }
+
+    // ---- Staff Invitations ----
+    // Pending invitations created from the Invite Staff screen.
+    match /agencies/{agencyId}/invitations/{invitationId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(agencyId);
+    }
+
+    // ---- Guarantors ----
+    match /agencies/{agencyId}/guarantors/{guarantorId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        (isAgencyOwnerOrAdmin() || getUserRole() == 'property_manager') &&
+        isMemberOfAgency(agencyId);
+
+      allow read: if isSignedIn() &&
+        (getUserRole() == 'accountant' || getUserRole() == 'auditor' || getUserRole() == 'field_agent') &&
+        isMemberOfAgency(agencyId);
+
+      allow create, update, delete: if false;
+    }
+
+    // ---- Notifications ----
+    match /agencies/{agencyId}/notifications/{notificationId} {
+      allow read: if isSignedIn() && isMemberOfAgency(agencyId);
+
+      allow write: if isSignedIn() &&
+        isMemberOfAgency(agencyId) &&
+        getUserRole() in ['agency_owner', 'agency_admin', 'property_manager', 'accountant', 'platform_admin'];
+    }
+
+    // ---- Documents (metadata register) ----
+    match /agencies/{agencyId}/documents/{documentId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        (isAgencyOwnerOrAdmin() || getUserRole() == 'property_manager') &&
+        isMemberOfAgency(agencyId);
+
+      allow read: if isSignedIn() &&
+        (getUserRole() == 'accountant' || getUserRole() == 'auditor') &&
+        isMemberOfAgency(agencyId);
+
+      allow create, update, delete: if false;
+    }
+
+    // ---- Journal Entries ----
+    match /agencies/{agencyId}/journal_entries/{entryId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        (isAgencyOwnerOrAdmin() || getUserRole() == 'accountant') &&
+        isMemberOfAgency(agencyId);
+
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      allow create, update, delete: if false;
+    }
+
+    // ---- Payment Allocations ----
+    match /agencies/{agencyId}/payment_allocations/{allocationId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        (isAgencyOwnerOrAdmin() || getUserRole() == 'accountant') &&
+        isMemberOfAgency(agencyId);
+
+      // property_manager opens the combined Rent & Payments screen, which reads
+      // allocations to show what was applied to each charge.
+      allow read: if isSignedIn() &&
+        getUserRole() == 'property_manager' &&
+        isMemberOfAgency(agencyId);
+
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      allow create, update, delete: if false;
+    }
+
+    // ---- Tenant Credits ----
+    // Movements on a tenant's credit balance (overpayments and the amounts
+    // applied back to rent charges).
+    match /agencies/{agencyId}/tenant_credits/{creditId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        (isAgencyOwnerOrAdmin() || getUserRole() == 'accountant') &&
+        isMemberOfAgency(agencyId);
+
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      allow create, update, delete: if false;
+    }
+
+    // ---- Ledger ----
+    match /agencies/{agencyId}/ledger/{entryId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      allow read, write: if isSignedIn() &&
+        (isAgencyOwnerOrAdmin() || getUserRole() == 'accountant') &&
+        isMemberOfAgency(agencyId);
+
+      allow read: if isSignedIn() &&
+        getUserRole() == 'auditor' &&
+        isMemberOfAgency(agencyId);
+
+      allow create, update, delete: if false;
+    }
+
+    // ---- Platform settings ----
+    match /platform_settings/{docId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+    }
+
+    // ---- Platform subscriptions ----
+    match /platform_subscriptions/{subscriptionId} {
+      allow read, write: if isSignedIn() && isPlatformAdmin();
+
+      // An agency's owners/admins manage their own subscription
+      allow read: if isSignedIn() &&
+        isMemberOfAgency(resource.data.agencyId);
+
+      allow create: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(request.resource.data.agencyId);
+
+      allow update: if isSignedIn() &&
+        isAgencyOwnerOrAdmin() &&
+        isMemberOfAgency(resource.data.agencyId);
+
+      allow delete: if false;
+    }
+
+    // ---- Platform admin collections ----
     match /platform/{doc=**} {
       allow read, write: if isPlatformAdmin();
     }

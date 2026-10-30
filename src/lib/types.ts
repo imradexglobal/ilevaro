@@ -73,6 +73,12 @@ export interface Property {
   reference: string;
   name: string;
   type: PropertyType;
+  /**
+   * The lettable type of the property/units (e.g. "2 Bedroom Flat", "Duplex").
+   * Configurable per agency in Settings and shown as a dropdown on creation.
+   * Separate from `type`, which describes the structural category.
+   */
+  unitType?: string;
   address: string;
   state: string;
   lga?: string;
@@ -123,6 +129,8 @@ export interface Tenancy {
   agencyId: string;
   propertyId: string;
   unitId: string;
+  /** Human-readable label of the leased unit, kept so lists can render it. */
+  unitLabel?: string;
   tenantId: string;
   landlordId?: string;
   status: TenancyStatus;
@@ -140,6 +148,8 @@ export interface Tenancy {
   escalationRate?: number;
   escalationIntervalMonths?: number;
   parentTenancyId?: string;
+  /** Why the tenant left. Recorded when a tenancy is terminated or expires. */
+  exitReason?: string;
   notes?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -205,6 +215,28 @@ export interface PaymentAllocation {
   createdAt: Timestamp;
 }
 
+/**
+ * A movement on a tenant's credit balance. When a payment is larger than the
+ * tenant's outstanding charges the excess becomes credit ("overpayment"); the
+ * credit is later drawn down automatically against new rent charges
+ * ("applied"). A negative `amount` reduces the balance.
+ */
+export type TenantCreditType = "overpayment" | "applied" | "adjustment";
+
+export interface TenantCredit {
+  id: string;
+  agencyId: string;
+  tenantId: string;
+  /** Positive adds credit, negative consumes it. */
+  amount: number;
+  type: TenantCreditType;
+  paymentId?: string;
+  rentChargeId?: string;
+  notes?: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
 export interface Owner {
   id: string;
   agencyId: string;
@@ -252,6 +284,8 @@ export interface Tenant {
   idType?: string;
   idNumber?: string;
   status: "prospect" | "active" | "former" | "blacklisted";
+  /** Unallocated money held on the tenant's account, e.g. from an overpayment. */
+  creditBalance?: number;
   notes?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;

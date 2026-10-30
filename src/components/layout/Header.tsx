@@ -1,4 +1,5 @@
-import { useLocation, Link } from "react-router-dom";
+import { useState, type FormEvent } from "react";
+import { useLocation, useNavigate, Link } from "react-router-dom";
 import { Menu, Search, Bell } from "lucide-react";
 import { useSidebar } from "@/context/SidebarContext";
 
@@ -8,23 +9,35 @@ const routeTitles: Record<string, string> = {
   "/landlords": "Landlords",
   "/tenants": "Tenants",
   "/tenancies": "Tenancies",
-  "/rent": "Rent & Charges",
-  "/payments": "Payments",
+  "/rent": "Rent & Payments",
+  "/payments": "Rent & Payments",
   "/arrears": "Arrears",
   "/deposits": "Deposits",
   "/expenses": "Expenses",
   "/commissions": "Commissions",
+  "/remittances": "Remittances",
   "/accounting": "Accounting",
   "/documents": "Documents",
   "/notifications": "Notifications",
   "/reports": "Reports",
+  "/search": "Search",
   "/settings": "Settings",
 };
 
 export function Header() {
   const { setMobileOpen } = useSidebar();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
   const title = routeTitles[pathname] || "ILEVARO";
+
+  const handleSearch = (e: FormEvent) => {
+    e.preventDefault();
+    const next = query.trim();
+    if (!next) return;
+    navigate(`/search?q=${encodeURIComponent(next)}`);
+    setQuery("");
+  };
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-slate-200 bg-white/80 px-4 backdrop-blur-sm sm:px-6">
@@ -40,15 +53,21 @@ export function Header() {
         <h1 className="text-lg font-semibold text-slate-900">{title}</h1>
       </div>
 
-      <div className="hidden items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 md:flex">
+      <form
+        onSubmit={handleSearch}
+        className="hidden items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 md:flex"
+        role="search"
+      >
         <Search className="mr-2 h-4 w-4 text-slate-400" />
         <input
           type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
           placeholder="Search properties, tenants, payments..."
           className="w-64 bg-transparent text-sm text-slate-700 placeholder-slate-400 focus:outline-none"
           aria-label="Global search"
         />
-      </div>
+      </form>
 
       <Link
         to="/notifications"

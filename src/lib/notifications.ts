@@ -1,5 +1,6 @@
 import "firebase/compat/firestore";
 import { db } from "./firebase";
+import { stripUndefined } from "./sanitize";
 
 export type NotificationType =
   | "rent_due"
@@ -35,7 +36,7 @@ export async function createNotification(
     .doc(agencyId)
     .collection("notifications")
     .add({
-      ...notification,
+      ...stripUndefined(notification),
       agencyId,
       severity: notification.severity,
       read: false,

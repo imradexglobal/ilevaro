@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { signUp } from "@/lib/auth";
 import { createAgencyForUser } from "@/lib/agency";
+import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/components/ui/Toast";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -20,6 +21,7 @@ export function RegisterPage() {
   const [error, setError] = useState("");
   const navigate = useNavigate();
   const toast = useToast();
+  const { reloadAgency } = useAuth();
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -52,6 +54,7 @@ export function RegisterPage() {
         state,
       });
 
+      await reloadAgency();
       toast.success("Account created. Welcome to ILEVARO!");
       navigate("/dashboard");
     } catch (err) {

@@ -2,7 +2,7 @@ import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { Loader2 } from "lucide-react";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "outline" | "ghost" | "danger";
+  variant?: "primary" | "secondary" | "outline" | "ghost" | "danger" | "success";
   size?: "sm" | "md" | "lg";
   loading?: boolean;
 }
@@ -35,4 +35,5 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     </button>
   )
 );
+Button.displayName = "Button";
 Button.displayName = "Button";

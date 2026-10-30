@@ -14,6 +14,12 @@ import {
   type SubscriptionStatus,
   type PlanTier,
 } from "@/lib/subscriptions";
+import {
+  DEFAULT_PLATFORM_SETTINGS,
+  getPlatformSettings,
+  savePlatformSettings,
+} from "@/lib/platform";
+import { formatCurrency, formatDate } from "@/lib/format";
 
 export function PlatformAdminPage() {
   const { agencyRole } = useAuth();
@@ -23,16 +29,21 @@ export function PlatformAdminPage() {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTab, setSelectedTab] = useState<"subscriptions" | "plans" | "settings">("subscriptions");
+  const [settings, setSettings] = useState(DEFAULT_PLATFORM_SETTINGS);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
     if (agencyRole !== "platform_admin") return;
     setLoading(true);
-    getSubscriptions().then((subs) => {
-      setSubscriptions(subs);
-      setLoading(false);
-    }).catch(() => {
-      setLoading(false);
-    });
+    Promise.all([getSubscriptions(), getPlatformSettings()])
+      .then(([subs, platformSettings]) => {
+        setSubscriptions(subs);
+        setSettings(platformSettings);
+        setLoading(false);
+      })
+      .catch(() => {
+        setLoading(false);
+      });
   }, [agencyRole]);
 
   if (agencyRole !== "platform_admin") {
@@ -79,6 +90,21 @@ export function PlatformAdminPage() {
       toast.success(`Plan upgraded to ${PLAN_TIERS[newTier].name}`);
     } catch {
       toast.error("Failed to upgrade plan");
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      await savePlatformSettings({
+        defaultTrialDays: Number(settings.defaultTrialDays) || 0,
+        maxAgencies: Number(settings.maxAgencies) || 0,
+      });
+      toast.success("Platform settings saved");
+    } catch {
+      toast.error("Failed to save platform settings");
+    } finally {
+      setSavingSettings(false);
     }
   };
 
@@ -154,7 +180,7 @@ export function PlatformAdminPage() {
                         </span>
                       </td>
                       <td className="py-3 px-4 border-b text-slate-700">
-                        {sub.trialEndsAt?.toLocaleDateString() || "N/A"}
+                        {sub.trialEndsAt ? formatDate(sub.trialEndsAt) : "N/A"}
                       </td>
                       <td className="py-3 px-4 border-b">
                         <div className="flex gap-2">
@@ -200,7 +226,8 @@ export function PlatformAdminPage() {
             <Card key={plan.tier} className="p-4">
               <h3 className="text-lg font-semibold">{plan.name}</h3>
               <p className="text-2xl font-bold mt-2">
-                ₦{plan.priceMonthly.toLocaleString()}/mo
+                {formatCurrency(plan.priceMonthly / 100)}
+                <span className="text-sm font-normal text-slate-500">/mo</span>
               </p>
               <p className="text-sm text-slate-500 mt-2">
                 {plan.maxProperties} properties
@@ -225,13 +252,29 @@ export function PlatformAdminPage() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700">Default Trial Length (days)</label>
-              <Input type="number" defaultValue={14} className="mt-1 w-48" />
+              <Input
+                type="number"
+                value={settings.defaultTrialDays}
+                onChange={(e) =>
+                  setSettings({ ...settings, defaultTrialDays: Number(e.target.value) })
+                }
+                className="mt-1 w-48"
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700">Max Agencies</label>
-              <Input type="number" defaultValue={1000} className="mt-1 w-48" />
+              <Input
+                type="number"
+                value={settings.maxAgencies}
+                onChange={(e) => setSettings({ ...settings, maxAgencies: Number(e.target.value) })}
+                className="mt-1 w-48"
+              />
             </div>
-            <Button className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700">
+            <Button
+              loading={savingSettings}
+              onClick={handleSaveSettings}
+              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+            >
               Save Settings
             </Button>
           </div>

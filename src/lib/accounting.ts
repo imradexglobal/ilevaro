@@ -1,5 +1,6 @@
 import "firebase/compat/firestore";
 import { db } from "./firebase";
+import { stripUndefined } from "./sanitize";
 
 export type Money = number;
 
@@ -50,7 +51,7 @@ export async function addLedgerEntry(
     .doc(entry.agencyId)
     .collection("ledger")
     .add({
-      ...entry,
+      ...stripUndefined(entry),
       amount: entry.amount,
       date: entry.date,
       createdAt: now,
