@@ -7,7 +7,7 @@ import type { Money } from "./accounting";
 import type { OccupancyStatus, PaymentMethod, TenantCreditType } from "./types";
 
 export type { Money } from "./accounting";
-export type { Property, Expense, Deposit, Commission } from "./types";
+export type { Property, Expense, Deposit, Commission, Tenancy } from "./types";
 
 type Timestamp = firebase.firestore.Timestamp;
 
@@ -1617,4 +1617,127 @@ export async function getJournalEntries(agencyId: string, options?: {
         reversalOf: data.reversalOf,
       };
     });
+}
+
+// ---- Tenancy Renewal Service ----
+
+/**
+ * Renew an expiring tenancy. Creates a new tenancy term starting from the
+ * previous tenancy's end date, carrying forward tenant and property details.
+ * The previous tenancy is closed (status: "renewed") and its unpaid rent
+ * is preserved as a historical obligation.
+ *
+ * @param agencyId The agency ID
+ * @param previousTenancyId The tenancy ID to renew
+ * @returns The new tenancy document reference ID
+ */
+export async function renewTenancy(
+  agencyId: string,
+  previousTenancyId: string
+): Promise<string> {
+  const base = db.collection("agencies").doc(agencyId);
+
+  // Get the previous tenancy details
+  const prevTenancyDoc = await base.collection("tenancies").doc(previousTenancyId).get();
+  if (!prevTenancyDoc.exists) {
+    throw new Error("Previous tenancy not found");
+  }
+  const prevTenancy = prevTenancyDoc.data() as Tenancy;
+
+  // Close the previous tenancy
+  await base.collection("tenancies").doc(previousTenancyId).update({
+    status: "renewed",
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+
+  // Create the new tenancy with carried-forward details
+  const newTenancyId = `renewed-${previousTenancyId}-${Date.now()}`;
+
+  await base.collection("tenancies").doc(newTenancyId).set({
+    agencyId,
+    propertyId: prevTenancy.propertyId,
+    unitId: prevTenancy.unitId,
+    tenantId: prevTenancy.tenantId,
+    unitLabel: prevTenancy.unitLabel,
+    status: "active",
+    startDate: prevTenancy.endDate,
+    endDate: {
+      _seconds: prevTenancy.endDate._seconds + 31536000, // Add 1 year (approximate)
+      _nanoseconds: prevTenancy.endDate._nanoseconds,
+    },
+    rentAmount: prevTenancy.rentAmount,
+    rentFrequency: prevTenancy.rentFrequency,
+    billingFrequency: prevTenancy.billingFrequency,
+    dueDay: prevTenancy.dueDay,
+    gracePeriodDays: prevTenancy.gracePeriodDays,
+    securityDeposit: prevTenancy.securityDeposit,
+    agencyFee: prevTenancy.agencyFee,
+    otherCharges: prevTenancy.otherCharges,
+    escalationRate: prevTenancy.escalationRate,
+    escalationIntervalMonths: prevTenancy.escalationIntervalMonths,
+    parentTenancyId: previousTenancyId,
+    exitReason: prevTenancy.exitReason,
+    notes: `${prevTenancy.notes || ""} (Renewed from ${previousTenancyId})`,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+
+  // Note: Rent charges for the new tenancy will be generated separately
+  // using generateRentCharges, which will create a new charge for the new term
+
+  return newTenancyId;
+}
+
+/**
+ * Check for expired tenancies that need renewal and trigger renewal for them.
+ * This should be called periodically (e.g., daily or weekly) to handle
+ * automatic tenancy renewal when terms expire.
+ *
+ * @param agencyId The agency ID
+ * @returns Number of tenancies renewed
+ */
+export async function checkAndRenewExpiredTenancies(agencyId: string): Promise<number> {
+  const base = db.collection("agencies").doc(agencyId);
+
+  // Get all active tenancies that have passed their end date
+  const tenancySnap = await base.collection("tenancies")
+    .where("status", "==", "active")
+    .get();
+
+  let renewedCount = 0;
+
+  const now = new Date();
+  const renewalIds: string[] = [];
+
+  for (const tenancyDoc of tenancySnap.docs) {
+    const tenancyData = tenancyDoc.data();
+    const endDate = tenancyData.endDate
+      ? (tenancyData.endDate.toDate ? tenancyData.endDate.toDate() : new Date(tenancyData.endDate))
+      : null;
+
+    if (endDate && now >= endDate) {
+      // This tenancy has expired - renew it
+      try {
+        const newId = await renewTenancy(agencyId, tenancyDoc.id);
+        renewalIds.push(tenancyDoc.id);
+        renewedCount++;
+      } catch (err) {
+        console.error(`Failed to renew tenancy ${tenancyDoc.id}`, err);
+      }
+    }
+  }
+
+  // Sync property occupancy after renewals
+  if (renewedCount > 0) {
+    const propertyIds: string[] = [];
+    for (const id of renewalIds) {
+      const doc = await base.collection("tenancies").doc(id).get();
+      if (doc.data()?.propertyId) {
+        propertyIds.push(doc.data()!.propertyId);
+      }
+    }
+    await Promise.all(propertyIds.map((pid) => syncPropertyOccupancy(agencyId, pid)));
+  }
+
+  return renewedCount;
 }

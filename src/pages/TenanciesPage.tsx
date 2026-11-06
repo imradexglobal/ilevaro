@@ -13,6 +13,8 @@ import {
   deleteTenancyCascade,
   getTenancyDependents,
   queryAgencyCollection,
+  renewTenancy,
+  checkAndRenewExpiredTenancies,
   setUnitStatus,
   syncPropertyOccupancy,
   updateAgencyDoc,
@@ -59,6 +61,12 @@ function TenancyListPage() {
   const [terminateTarget, setTerminateTarget] = useState<TenancyRecord | null>(null);
   const [exitReason, setExitReason] = useState("");
   const [terminating, setTerminating] = useState(false);
+
+  const [evictTarget, setEvictTarget] = useState<TenancyRecord | null>(null);
+  const [evicting, setEvicting] = useState(false);
+
+  const [renewTarget, setRenewTarget] = useState<TenancyRecord | null>(null);
+  const [renewing, setRenewing] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<TenancyRecord | null>(null);
   const [dependents, setDependents] = useState<TenancyDependents | null>(null);
@@ -146,9 +154,51 @@ function TenancyListPage() {
     }
   };
 
+  const handleEvict = async () => {
+    if (!evictTarget || !agencyId) return;
+    setEvicting(true);
+    try {
+      // Evict: terminate the tenancy and mark property as available
+      await setStatus(evictTarget, "terminated", "Evicted by agent");
+      setEvictTarget(null);
+      setEvicting(false);
+      toast.success(`Tenancy evicted for ${tenantName(evictTarget.tenantId)} at ${propertyName(evictTarget.propertyId)}`);
+    } catch (err) {
+      toast.error("Failed to evict tenant");
+      console.error(err);
+      setEvicting(false);
+    }
+  };
+
+  const handleRenew = async () => {
+    if (!renewTarget || !agencyId) return;
+    setRenewing(true);
+    try {
+      const newTenancyId = await renewTenancy(agencyId, renewTarget.id);
+      // Sync property occupancy after renewal
+      await syncPropertyOccupancy(agencyId, renewTarget.propertyId);
+      toast.success(`Tenancy renewed: new term started (ID: ${newTenancyId.substring(0, 8)}...)`);
+      setRenewTarget(null);
+      setRenewing(false);
+      await load();
+    } catch (err) {
+      toast.error("Failed to renew tenancy");
+      console.error(err);
+      setRenewing(false);
+    }
+  };
+
   const openTerminate = (tenancy: TenancyRecord) => {
     setTerminateTarget(tenancy);
     setExitReason(tenancy.exitReason ?? "");
+  };
+
+  const openEvict = (tenancy: TenancyRecord) => {
+    setEvictTarget(tenancy);
+  };
+
+  const openRenew = (tenancy: TenancyRecord) => {
+    setRenewTarget(tenancy);
   };
 
   const handleTerminate = async () => {
@@ -372,7 +422,7 @@ function TenancyListPage() {
                           {tenancy.status}
                         </Badge>
                       </td>
-                      {canManage && (
+{canManage && (
                         <td className="text-right px-6 py-3 whitespace-nowrap">
                           <Button
                             size="sm"
@@ -399,6 +449,26 @@ function TenancyListPage() {
                               onClick={() => openTerminate(tenancy)}
                             >
                               Terminate
+                            </Button>
+                          )}
+                          {tenancy.status === "active" && (
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              className="ml-2"
+                              onClick={() => openEvict(tenancy)}
+                            >
+                              Evict
+                            </Button>
+                          )}
+                          {tenancy.status === "active" && (
+                            <Button
+                              size="sm"
+                              variant="info"
+                              className="ml-2"
+                              onClick={() => openRenew(tenancy)}
+                            >
+                              Renew
                             </Button>
                           )}
                           <Button
@@ -525,6 +595,56 @@ function TenancyListPage() {
           onChange={(e) => setExitReason(e.target.value)}
           placeholder="e.g. Lease ended, relocating, rent arrears"
         />
+      </Modal>
+
+      <Modal
+        open={!!evictTarget}
+        onClose={() => setEvictTarget(null)}
+        title="Evict tenant"
+        size="sm"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setEvictTarget(null)} disabled={evicting}>
+              Cancel
+            </Button>
+            <Button variant="danger" loading={evicting} onClick={handleEvict}>
+              Evict
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-slate-600">
+          Evict{" "}
+          <span className="font-medium">
+            {evictTarget ? tenantName(evictTarget.tenantId) : ""}
+          </span>{" "}
+          from the property. This will terminate the tenancy and mark the property as vacant.
+        </p>
+      </Modal>
+
+      <Modal
+        open={!!renewTarget}
+        onClose={() => setRenewTarget(null)}
+        title="Renew tenancy"
+        size="sm"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setRenewTarget(null)} disabled={renewing}>
+              Cancel
+            </Button>
+            <Button variant="primary" loading={renewing} onClick={handleRenew}>
+              Renew
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-slate-600">
+          Renew{" "}
+          <span className="font-medium">
+            {renewTarget ? tenantName(renewTarget.tenantId) : ""}
+          </span>{" "}
+          this tenancy. A new term will start from the current term's end date, carrying forward the tenant and property details. The previous tenancy will be closed and preserved in history.
+        </p>
       </Modal>
 
       <ConfirmDialog

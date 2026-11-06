@@ -189,7 +189,7 @@ service cloud.firestore {
         isMemberOfAgency(agencyId);
 
       // tenant: no direct access
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Tenancies ----
@@ -235,7 +235,7 @@ service cloud.firestore {
         get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(tenancyId)).data.tenantId == request.auth.uid;
 
       // Tenant cannot write
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Rent Charges ----
@@ -282,7 +282,7 @@ service cloud.firestore {
         get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(resource.data.tenancyId)).data.tenantId == request.auth.uid;
 
       // Tenant cannot write
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Payments ----
@@ -328,7 +328,7 @@ service cloud.firestore {
         resource.data.tenantId == request.auth.uid;
 
       // Tenant cannot write
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Expenses ----
@@ -368,7 +368,7 @@ service cloud.firestore {
         isMemberOfAgency(agencyId);
 
       // tenant: no access
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Deposits ----
@@ -407,7 +407,7 @@ service cloud.firestore {
         get(/databases/$(database)/documents/agencies/$(agencyId)/tenancies/$(resource.data.tenancyId)).data.tenantId == request.auth.uid;
 
       // Tenant cannot write
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Commissions ----
@@ -440,7 +440,7 @@ service cloud.firestore {
         isMemberOfAgency(agencyId);
 
       // tenant: no access
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Remittances ----
@@ -473,7 +473,7 @@ service cloud.firestore {
         isMemberOfAgency(agencyId);
 
       // tenant: no access
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Owner records ----
@@ -511,7 +511,7 @@ service cloud.firestore {
         ownerId == request.auth.uid;
 
       // tenant: no access
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Tenant records ----
@@ -556,7 +556,7 @@ service cloud.firestore {
         tenantId == request.auth.uid;
 
       // Tenant cannot write
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Activity Events (append-only) ----
@@ -614,7 +614,7 @@ service cloud.firestore {
         (getUserRole() == 'accountant' || getUserRole() == 'auditor' || getUserRole() == 'field_agent') &&
         isMemberOfAgency(agencyId);
 
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Notifications ----
@@ -638,7 +638,7 @@ service cloud.firestore {
         (getUserRole() == 'accountant' || getUserRole() == 'auditor') &&
         isMemberOfAgency(agencyId);
 
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Journal Entries ----
@@ -653,7 +653,7 @@ service cloud.firestore {
         getUserRole() == 'auditor' &&
         isMemberOfAgency(agencyId);
 
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Payment Allocations ----
@@ -674,7 +674,7 @@ service cloud.firestore {
         getUserRole() == 'auditor' &&
         isMemberOfAgency(agencyId);
 
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Tenant Credits ----
@@ -691,7 +691,7 @@ service cloud.firestore {
         getUserRole() == 'auditor' &&
         isMemberOfAgency(agencyId);
 
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Ledger ----
@@ -706,7 +706,7 @@ service cloud.firestore {
         getUserRole() == 'auditor' &&
         isMemberOfAgency(agencyId);
 
-      allow create, update, delete: if false;
+      
     }
 
     // ---- Platform settings ----

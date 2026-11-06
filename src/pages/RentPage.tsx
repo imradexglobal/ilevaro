@@ -413,6 +413,20 @@ export function RentPage() {
       toast.error("Enter a valid amount");
       return;
     }
+    const tenantOutstanding = rentCharges
+      .filter((c) => {
+        const t = tenancies.find((x) => x.id === c.tenancyId);
+        return t?.tenantId === paymentForm.tenantId;
+      })
+      .reduce((sum, c) => sum + (c.outstanding || 0), 0);
+    if (tenantOutstanding <= 0) {
+      toast.error("No outstanding balance for this tenant");
+      return;
+    }
+    if (amount > tenantOutstanding) {
+      toast.error(`Payment cannot exceed outstanding balance of ${formatCurrency(tenantOutstanding)}`);
+      return;
+    }
     setSaving(true);
     try {
       const paymentId = await recordPayment({

@@ -6,13 +6,8 @@ import {
   UserCog,
   KeyRound,
   Wallet,
-  Receipt,
-  Wrench,
-  PiggyBank,
   FileText,
-  HandCoins,
   Bell,
-  BarChart3,
   Settings,
   Landmark,
   LogOut,
@@ -38,18 +33,12 @@ const navItems: NavItem[] = [
   { label: "Tenancies", to: "/tenancies", icon: <KeyRound className="h-5 w-5" />, section: "Operations", allowedRoles: ["agency_owner", "agency_admin", "property_manager", "platform_admin"] },
   { label: "Rent & Payments", to: "/rent", icon: <Wallet className="h-5 w-5" />, section: "Operations", allowedRoles: ["agency_owner", "agency_admin", "property_manager", "accountant", "platform_admin"] },
   { label: "Arrears", to: "/arrears", icon: <Landmark className="h-5 w-5" />, section: "Operations", allowedRoles: ["agency_owner", "agency_admin", "property_manager", "platform_admin"] },
-  { label: "Deposits", to: "/deposits", icon: <PiggyBank className="h-5 w-5" />, section: "Finance", allowedRoles: ["agency_owner", "agency_admin", "accountant", "platform_admin"] },
-  { label: "Expenses", to: "/expenses", icon: <Wrench className="h-5 w-5" />, section: "Finance", allowedRoles: ["agency_owner", "agency_admin", "property_manager", "accountant", "platform_admin"] },
-  { label: "Commissions", to: "/commissions", icon: <Receipt className="h-5 w-5" />, section: "Finance", allowedRoles: ["agency_owner", "agency_admin", "property_manager", "platform_admin"] },
-  { label: "Remittances", to: "/remittances", icon: <HandCoins className="h-5 w-5" />, section: "Finance", allowedRoles: ["agency_owner", "agency_admin", "accountant", "auditor", "platform_admin"] },
-  { label: "Accounting", to: "/accounting", icon: <Landmark className="h-5 w-5" />, section: "Finance", allowedRoles: ["agency_owner", "agency_admin", "accountant", "platform_admin"] },
   { label: "Documents", to: "/documents", icon: <FileText className="h-5 w-5" />, section: "Resources", allowedRoles: ["agency_owner", "agency_admin", "property_manager", "platform_admin"] },
   { label: "Notifications", to: "/notifications", icon: <Bell className="h-5 w-5" />, section: "Resources", allowedRoles: ["agency_owner", "agency_admin", "property_manager", "platform_admin"] },
-  { label: "Reports", to: "/reports", icon: <BarChart3 className="h-5 w-5" />, section: "Resources", allowedRoles: ["agency_owner", "agency_admin", "property_manager", "accountant", "platform_admin"] },
   { label: "Settings", to: "/settings", icon: <Settings className="h-5 w-5" />, section: "Administration", allowedRoles: ["agency_owner", "platform_admin"] },
 ];
 
-const sections = ["Overview", "Portfolio", "Operations", "Finance", "Resources", "Administration"];
+const sections = ["Overview", "Portfolio", "Operations", "Resources", "Administration"];
 
 export function Sidebar() {
   const { collapsed, mobileOpen, toggleCollapsed, setMobileOpen } = useSidebar();
